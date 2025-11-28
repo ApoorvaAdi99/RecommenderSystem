@@ -41,64 +41,65 @@ class RecommenderSystem:
         self.user_to_idx = {}
         self.item_to_idx = {}
         self.idx_to_item = {}
-        self.use_test_split = False  # Flag for using train/test split
         self.item_popularity = {}  # Track item popularity
         self.popular_items_cache = None  # Cache popular items
         self.reverse_similarity_index = None  # Reverse index for similarity
         
-    def load_data(self, filename, test_ratio=0.0, random_seed=42):
-        """
-        Load data from train-2.txt file
-        If test_ratio > 0, splits data into train/test sets
-        """
-        if test_ratio > 0:
-            self.use_test_split = True
-            print(f"Loading data and splitting into train/test (test_ratio={test_ratio})...")
-            random.seed(random_seed)
-            np.random.seed(random_seed)
-        else:
-            print("Loading data...")
-        
-        all_user_items = defaultdict(list)
-        
-        # First, load all data
-        with open(filename, 'r') as f:
+    def load_raw_data(self, filename):
+        """Load full user-item interactions without splitting."""
+        self.user_items.clear()
+        self.test_user_items.clear()
+        self.item_users.clear()
+
+        with open(filename, "r") as f:
             for line in f:
                 parts = line.strip().split()
                 if len(parts) < 2:
                     continue
                 user_id = int(parts[0])
-                items = [int(item) for item in parts[1:]]
-                all_user_items[user_id] = items
-        
-        # Split into train/test if requested
-        for user_id, items in all_user_items.items():
-            if test_ratio > 0 and len(items) > 1:
-                # Split items for this user
-                num_test = max(1, int(len(items) * test_ratio))
-                test_items = set(random.sample(items, num_test))
-                train_items = set(items) - test_items
-                
-                self.user_items[user_id] = train_items
-                self.test_user_items[user_id] = test_items
-                
-                for item in train_items:
-                    self.item_users[item].add(user_id)
-            else:
-                # No split - all items go to training
+                items = [int(x) for x in parts[1:]]
                 self.user_items[user_id] = set(items)
-                for item in items:
-                    self.item_users[item].add(user_id)
-        
+                for it in items:
+                    self.item_users[it].add(user_id)
+
         print(f"Loaded {len(self.user_items)} users and {len(self.item_users)} items")
-        if test_ratio > 0:
-            total_train = sum(len(items) for items in self.user_items.values())
-            total_test = sum(len(items) for items in self.test_user_items.values())
-            print(f"Train interactions: {total_train}, Test interactions: {total_test}")
     
     def perform_eda(self):
         """Perform exploratory data analysis"""
         perform_eda(self.user_items, self.item_users)
+    
+    def split_train_test(self, test_ratio=0.2, random_seed=42):
+        """Create train/test split from current user_items."""
+       
+        random.seed(random_seed)
+        np.random.seed(random_seed)
+
+        self.test_user_items.clear()
+        new_train = {}
+
+        for user_id, items in self.user_items.items():
+            items = list(items)
+            if len(items) > 1:
+                num_test = max(1, int(len(items) * test_ratio))
+                test_items = set(random.sample(items, num_test))
+                train_items = set(items) - test_items
+                new_train[user_id] = train_items
+                self.test_user_items[user_id] = test_items
+            else:
+                new_train[user_id] = set(items)
+
+        self.user_items = new_train
+
+        # rebuild item_users from train
+        self.item_users.clear()
+        for u, items in self.user_items.items():
+            for it in items:
+                self.item_users[it].add(u)
+
+        total_train = sum(len(v) for v in self.user_items.values())
+        total_test = sum(len(v) for v in self.test_user_items.values())
+        print(f"Train interactions: {total_train}, Test interactions: {total_test}")
+
     
     def build_user_item_matrix(self, normalize=False):
         """
@@ -408,8 +409,8 @@ class RecommenderSystem:
     
     def evaluate(self, k_values=[5, 10, 20], max_users=None, sample_ratio=1.0):
         """Evaluate the recommender system on test set"""
-        if not self.use_test_split:
-            print("Error: Cannot evaluate without train/test split. Use load_data with test_ratio > 0")
+        if len(self.test_user_items) == 0:
+            print("Error: No test split available. Run split_train_test() first.")
             return None
         
         print(f"\nEvaluating on test set...")
@@ -543,7 +544,9 @@ def main():
         print("EVALUATION MODE")
         print("="*60)
         
-        recommender.load_data('train-2.txt', test_ratio=0.2, random_seed=42)
+        recommender.load_raw_data("train-2.txt")
+        recommender.perform_eda()
+        recommender.split_train_test(test_ratio=0.2, random_seed=42)
         recommender.build_user_item_matrix()
         
         print("\n" + "="*60)
@@ -566,7 +569,8 @@ def main():
         print("SUBMISSION MODE")
         print("="*60)
         
-        recommender.load_data('train-2.txt')
+        recommender.load_raw_data("train-2.txt")
+        recommender.perform_eda()
         recommender.build_user_item_matrix()
         
         print("\n" + "="*60)
